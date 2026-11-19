@@ -1,0 +1,11 @@
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.test-tools/
+node_modules/
+*.sqlite-journal
+*.sqlite-wal
+*.sqlite-shm
+reports/test-*.log
+reports/bootstrap.log
+reports/live-sync.log

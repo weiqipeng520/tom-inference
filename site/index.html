@@ -1,0 +1,59 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#071321">
+  <meta name="description" content="Tom推演系统：中央发布的冻结预测、模型状态、滚动回测与历史开奖仪表盘。">
+  <title>Tom推演系统</title>
+  <link rel="stylesheet" href="./assets/style.css">
+  <script src="./assets/app.js" defer></script>
+</head>
+<body>
+  <a class="skip-link" href="#main">跳到主要内容</a>
+  <div class="ambient" aria-hidden="true"></div>
+  <div class="shell">
+    <header class="masthead">
+      <a class="brand" href="#" aria-label="Tom推演系统首页"><span class="brand-mark" aria-hidden="true">T<span>°</span></span><span class="brand-word">TOM <small>INFERENCE LAB</small></span></a>
+      <span class="status-chip"><i aria-hidden="true"></i>中央发布 · 全站一致</span>
+    </header>
+    <main id="main">
+      <section class="hero" aria-labelledby="page-title">
+        <div><div class="eyebrow">CENTRAL INTELLIGENCE / V3</div><h1 id="page-title">Tom推演系统<span class="title-dot" aria-hidden="true"></span></h1><p class="hero-copy">一份中央快照，同一组冻结候选。<br class="mobile-break">从模型轨迹到每期记录，保持可核验。</p></div>
+        <div class="hero-stamp"><span class="signal" aria-hidden="true">▥</span><div><span class="muted">发布同步</span><strong id="connection-label">等待首份快照</strong><span id="publication-time">尚未读取中央发布</span></div></div>
+      </section>
+      <div id="notice" class="notice" role="status" aria-live="polite" hidden></div>
+      <nav class="section-nav" aria-label="页面分区"><a href="#overview">开奖概览</a><a href="#forecast">冻结候选</a><a href="#model">模型与回测</a><a href="#history">历史档案</a></nav>
+      <div class="dashboard">
+        <section class="panel draw-panel" id="overview" aria-labelledby="latest-title">
+          <div class="panel-heading"><div><div class="eyebrow">LATEST RESULT</div><h2 id="latest-title">最新开奖</h2></div><span class="quiet-chip" id="latest-expect">等待发布</span></div>
+          <div id="latest-balls" class="draw-balls"><p class="empty">开奖数据随中央快照发布</p></div>
+          <div class="panel-bottom"><span id="latest-time">—</span><span>6 个正码 <b class="muted">＋</b> 1 个特别号</span></div>
+        </section>
+        <section class="panel countdown-panel" aria-labelledby="countdown-title">
+          <div class="panel-heading"><div><div class="eyebrow">NEXT SCHEDULE</div><h2 id="countdown-title">下期开奖倒计时</h2></div><span class="quiet-chip">UTC+8</span></div>
+          <div id="countdown" class="countdown" aria-live="off">--<span>:</span>--<span>:</span>--</div>
+          <p id="schedule-label" class="schedule-label">等待中央预计时间</p><p class="caption">预计 schedule · 非开奖确认时间，不自动顺延期号</p>
+        </section>
+        <section class="panel forecast-panel span-full" id="forecast" aria-labelledby="forecast-title">
+          <div class="panel-heading"><div><div class="eyebrow">FROZEN FORECAST</div><h2 id="forecast-title">中央冻结候选 <span id="forecast-expect" class="inline-tag">待发布</span></h2></div><span id="forecast-state" class="quiet-chip">只读发布</span></div>
+          <div id="forecast-expired" class="expired-banner" hidden>等待中央训练/下一期 · 原冻结预测已保留，请以原目标期号为准。</div>
+          <div class="forecast-layout">
+            <div class="candidate-column"><div class="subheading"><h3>号码候选</h3><span id="number-count" class="muted">中央排序</span></div><div id="number-tabs" class="tabs" role="tablist" aria-label="号码候选层级"><button type="button" role="tab" aria-selected="false" data-size="36" aria-controls="number-candidates">36 码</button><button type="button" role="tab" aria-selected="false" data-size="24" aria-controls="number-candidates">24 码</button><button type="button" role="tab" aria-selected="true" data-size="16" aria-controls="number-candidates">16 码</button><button type="button" role="tab" aria-selected="false" data-size="8" aria-controls="number-candidates">8 码</button><button type="button" role="tab" aria-selected="false" data-size="4" aria-controls="number-candidates">4 码</button></div><div id="number-candidates" class="number-grid" role="tabpanel" aria-label="冻结号码候选"><p class="empty">等待服务器发布冻结候选</p></div></div>
+            <div class="candidate-column zodiac-column"><div class="subheading"><h3>生肖候选</h3><span id="zodiac-count" class="muted">中央映射</span></div><div id="zodiac-tabs" class="tabs" role="tablist" aria-label="生肖候选层级"><button type="button" role="tab" aria-selected="false" data-size="9" aria-controls="zodiac-candidates">9 肖</button><button type="button" role="tab" aria-selected="true" data-size="6" aria-controls="zodiac-candidates">6 肖</button><button type="button" role="tab" aria-selected="false" data-size="4" aria-controls="zodiac-candidates">4 肖</button><button type="button" role="tab" aria-selected="false" data-size="2" aria-controls="zodiac-candidates">2 肖</button></div><div id="zodiac-candidates" class="zodiac-grid" role="tabpanel" aria-label="冻结生肖候选"><p class="empty">等待中央映射</p></div><p id="mapping-note" class="caption"></p></div>
+          </div>
+          <div class="forecast-meta"><span id="forecast-trained">训练截止 —</span><span id="forecast-version">模型 —</span><span id="forecast-created">冻结时间 —</span></div>
+          <details class="audit-details"><summary>核验冻结摘要与模型评分</summary><dl class="audit-grid"><div><dt>Forecast digest</dt><dd id="forecast-digest">—</dd></div><div><dt>训练指纹</dt><dd id="forecast-fingerprint">—</dd></div><div><dt>发布来源</dt><dd id="forecast-source">—</dd></div></dl><p id="model-note" class="caption"></p><p class="caption">prob / probabilities 为模型评分，不代表真实中奖概率，不保证命中。页面不进行本地训练、选号或重排，不覆盖中央预测。</p><div id="score-grid" class="score-grid" aria-label="中央发布模型评分"></div></details>
+        </section>
+        <section class="panel model-panel" id="model" aria-labelledby="model-title"><div class="panel-heading"><div><div class="eyebrow">MODEL TELEMETRY</div><h2 id="model-title">中央模型状态</h2></div><span id="training-version" class="quiet-chip">待发布</span></div><div id="training-metrics" class="metric-grid"><p class="empty">训练指标随快照提供</p></div><div class="subheading"><h3>算法权重 <small>真实发布值</small></h3><span>WEIGHTS</span></div><div id="model-weights" class="weights"><p class="empty">暂无发布权重</p></div><p id="training-time" class="caption">最后训练 —</p><details class="audit-details"><summary>训练可核验轨迹</summary><dl class="audit-grid"><div><dt>Training fingerprint</dt><dd id="training-fingerprint">—</dd></div><div><dt>Trace hash</dt><dd id="trace-hash">—</dd></div></dl></details></section>
+        <section class="panel records-panel" aria-labelledby="records-title"><div class="panel-heading"><div><div class="eyebrow">LIVE PERFORMANCE</div><h2 id="records-title">预测记录 / 实时命中</h2></div><span id="settlement-count" class="quiet-chip">0 期</span></div><div id="live-summary" class="live-summary"></div><p class="caption">仅统计中央发布、可核验且 eligible 的开奖前记录。历史导入不补造开奖前成绩；延迟结算单列。</p><div class="table-scroll" tabindex="0" role="region" aria-label="预测与结算记录"><table><thead><tr><th>目标期</th><th>特别号 / 肖</th><th>16 码</th><th>6 肖</th><th>状态</th></tr></thead><tbody id="forecast-records"><tr><td colspan="5" class="empty">暂无中央记录</td></tr></tbody></table></div><p class="caption" id="records-note"></p></section>
+        <section class="panel backtest-panel span-full" aria-labelledby="backtest-title"><div class="panel-heading"><div><div class="eyebrow">ROLLING VALIDATION</div><h2 id="backtest-title">滚动回测 <span class="inline-tag">与实时成绩分开</span></h2></div><span id="backtest-count" class="quiet-chip">待发布</span></div><p id="backtest-split" class="caption">回测范围与分割方法由中央报告提供</p><div class="backtest-controls"><label>号码口径 <select id="backtest-number-size"><option value="36">36 码</option><option value="24">24 码</option><option value="16" selected>16 码</option><option value="8">8 码</option><option value="4">4 码</option></select></label><label>生肖口径 <select id="backtest-zodiac-size"><option value="9">9 肖</option><option value="6" selected>6 肖</option><option value="4">4 肖</option><option value="2">2 肖</option></select></label></div><div class="table-scroll" tabindex="0" role="region" aria-label="滚动回测算法比较"><table><thead><tr><th>算法</th><th>号码命中</th><th>基线 / 95% 区间</th><th>生肖命中</th><th>Log loss</th><th>Brier</th></tr></thead><tbody id="backtest-rows"><tr><td colspan="6" class="empty">暂无中央回测报告</td></tr></tbody></table></div><div id="backtest-notes" class="report-notes"></div><p id="legacy-backtest-note" class="caption" hidden>快照另含旧版回测报告，仅作为历史附件，不混入本次滚动回测。</p></section>
+        <section class="panel history-panel span-full" id="history" aria-labelledby="history-title"><div class="panel-heading"><div><div class="eyebrow">DRAW ARCHIVE</div><h2 id="history-title">历史统计 / 搜索</h2></div><span id="history-total" class="quiet-chip">0 条</span></div><div id="history-stats" class="history-stats"></div><details class="history-frequency"><summary>历史特别号频次 · 仅描述已开奖数据</summary><div id="history-frequency" class="frequency-grid" aria-label="1至49历史特别号次数"></div><p class="caption">全量历史样本的实际计数，非候选排名或预测评分；不随搜索条件重算。</p></details><div class="history-toolbar"><label class="search-field"><span aria-hidden="true">⌕</span><input id="history-search" type="search" placeholder="搜索期号、日期、号码、生肖" aria-label="搜索历史开奖" autocomplete="off"></label><span id="history-result-count" class="caption">等待中央历史数据</span></div><div class="table-scroll" tabindex="0" role="region" aria-label="历史开奖列表"><table class="history-table"><thead><tr><th>期号</th><th>开奖时间 UTC+8</th><th>开奖号码 · 最后为特别号</th></tr></thead><tbody id="history-rows"><tr><td colspan="3" class="empty">暂无历史开奖</td></tr></tbody></table></div><div class="pagination"><button id="history-prev" type="button" disabled>← 上一页</button><span id="history-page">0 / 0</span><button id="history-next" type="button" disabled>下一页 →</button></div><p id="coverage-note" class="caption"></p></section>
+        <section class="panel publication-panel span-full" aria-labelledby="publication-title"><div class="panel-heading"><div><div class="eyebrow">OPEN PUBLICATION</div><h2 id="publication-title">发布与数据</h2></div><span class="quiet-chip">每 60 秒检查</span></div><p class="caption">只读取本站 data.json，不直连远端开奖源。快照离线完整保留；中央发布更新后全站访客读取相同预测。</p><div class="download-row"><button id="download-snapshot" type="button" disabled>完整发布 JSON <span>↗</span></button><button id="download-forecast" type="button" disabled>当前冻结预测 <span>↗</span></button><button id="download-csv" type="button" disabled>历史 CSV <span>↗</span></button><a class="button-link" href="./data/tom.sqlite" download>数据库 SQLite <span>↗</span></a></div><dl class="audit-grid publication-audit"><div><dt>Snapshot ID</dt><dd id="snapshot-id">—</dd></div><div><dt>同步检查 / 最后成功</dt><dd id="sync-time">—</dd></div><div><dt>本机缓存</dt><dd id="cache-state">尚未写入</dd></div><div><dt>数据来源（仅展示）</dt><dd id="source-label">—</dd></div></dl><ul id="publication-warnings" class="warning-list"></ul></section>
+      </div>
+    </main>
+    <footer><span>TOM <b>INFERENCE LAB</b></span><p>记录有迹可循，评分并非承诺。<br>中央训练 · 冻结发布 · 全站一致</p><a href="#page-title">回到顶部 ↑</a></footer>
+  </div>
+  <noscript><p class="noscript">请开启 JavaScript 读取中央快照。本站不内置演示开奖或候选。</p></noscript>
+</body>
+</html>
