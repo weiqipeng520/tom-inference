@@ -5,7 +5,7 @@ import hashlib,json,math
 from collections import deque
 from datetime import datetime,timedelta
 
-VERSION='tom-online-2.0'
+VERSION='tom-online-2.1'
 ZODIAC=list('鼠牛虎兔龙蛇马羊猴鸡狗猪')
 ALIASES={'龍':'龙','馬':'马','雞':'鸡','豬':'猪'}
 MODELS=['dirichlet','exponential','markov','online_softmax','uniform_expert']
@@ -35,7 +35,7 @@ def fingerprint(rows):
  b=json.dumps({'model':VERSION,'params':PARAMS,'history':[[r['expect'],r['openTime'],r['numbers'],r['zodiac']] for r in rows]},ensure_ascii=False,separators=(',',':')).encode();return 'sha256:'+hashlib.sha256(b).hexdigest()
 
 def new_state():
- return {'version':VERSION,'params':PARAMS,'n':0,'long':[0]*49,'short':[0]*49,'ewma':[0.0]*49,'ewma_total':0.0,'previous':-1,'trans':[[0]*49 for _ in range(49)],'trans_total':[0]*49,'queue':[],'loss':[0.0]*len(MODELS),'online_weights':[[0.0]*FEATURE_COUNT for _ in range(49)],'softmax_updates':0,'train_loss':0.0,'train_brier':0.0,'trace_hash':'0'*64}
+ return {'version':VERSION,'params':PARAMS,'n':0,'log_loss_sum':[0.0]*len(MODELS),'score_count':0,'long':[0]*49,'short':[0]*49,'ewma':[0.0]*49,'ewma_total':0.0,'previous':-1,'trans':[[0]*49 for _ in range(49)],'trans_total':[0]*49,'queue':[],'loss':[0.0]*len(MODELS),'online_weights':[[0.0]*FEATURE_COUNT for _ in range(49)],'softmax_updates':0,'train_loss':0.0,'train_brier':0.0,'trace_hash':'0'*64}
 
 def _normal(values):
  total=sum(values)
@@ -72,7 +72,9 @@ def _stable_json(value):return json.dumps(value,ensure_ascii=False,sort_keys=Tru
 def observe(state,row,pred):
  n=state['n'];target=int(row['numbers'][6])-1;actual=row['expect'];x=pred['features']
  if n>=PARAMS['hedge_burnin']:
-  for j,p in enumerate(pred['models']):state['loss'][j]+=-math.log(max(PARAMS['logloss_clip'],p[target]))
+  for j,p in enumerate(pred['models']):
+   loss=-math.log(max(PARAMS['logloss_clip'],p[target]));state['loss'][j]+=loss;state['log_loss_sum'][j]+=loss
+  state['score_count']+=1
  # Online multinomial SGD: predict first, score, then reveal the draw and train.
  if n>=PARAMS['softmax_warmup']:
   p=pred['models'][3];lr=PARAMS['softmax_eta']/math.sqrt(1+n/500);decay=1-lr*PARAMS['softmax_decay'];row_losses=state['online_weights']
@@ -136,8 +138,8 @@ def generate(records,target_expect,state=None,trained=None):
  s=train(rows,state) if state else train(rows)
  pred=forecast(s);order=sorted(range(49),key=lambda i:(-pred['probabilities'][i],i+1));ranking=[i+1 for i in order]
  m,zthrough,inferred=_map(rows);zp={z:sum(pred['probabilities'][n-1] for n in range(1,50) if m[str(n)]==z) for z in ZODIAC};zrank=sorted(ZODIAC,key=lambda z:(-zp[z],ZODIAC.index(z)))
- top=[{'id':k,'name':MODEL_NAMES[k],'weight':pred['weights'][i],'log_loss':s['loss'][i]/max(1,s['n']-PARAMS['hedge_burnin']),'probabilities':pred['models'][i]} for i,k in enumerate(MODELS)]
- return {'version':VERSION,'targetExpect':target,'trainingThrough':rows[-1]['expect'],'trainingCount':len(rows),'trainingFingerprint':fingerprint(rows),'numberRanking':ranking,'numberSets':{str(k):ranking[:k] for k in (36,24,16,8,4)},'zodiacRanking':zrank,'zodiacSets':{str(k):zrank[:k] for k in (9,6,4,2)},'models':top,'probabilities':pred['probabilities'],'zodiacProbabilities':zp,'zodiacMap':m,'mappingNote':f'Predictor map uses only outcomes through {zthrough}; inferred residues={inferred}. Lunar-year boundary is held until observations confirm a new offset.','modelNote':'Prequential fixed-hyperparameter models: Dirichlet, exponential decay, Markov fallback, online softmax SGD, adaptive Hedge. Training labels are only already observed specials. Historical performance can remain at the uniform baseline or worse.','trainingState':{'n':s['n'],'throughExpect':s['through_expect'],'fingerprint':s['through_fingerprint'],'weightUpdates':s['n'],'softmaxUpdates':s['softmax_updates'],'onlineLogLoss':s['train_loss']/max(1,s['softmax_updates']),'onlineBrier':s['train_brier']/max(1,s['softmax_updates']),'traceHash':s['trace_hash']}}
+ top=[{'id':k,'name':MODEL_NAMES[k],'weight':pred['weights'][i],'log_loss':s['log_loss_sum'][i]/s['score_count'] if s['score_count'] else None,'probabilities':pred['models'][i]} for i,k in enumerate(MODELS)]
+ return {'version':VERSION,'targetExpect':target,'trainingThrough':rows[-1]['expect'],'trainingCount':len(rows),'trainingFingerprint':fingerprint(rows),'numberRanking':ranking,'numberSets':{str(k):ranking[:k] for k in (36,24,16,8,4)},'zodiacRanking':zrank,'zodiacSets':{str(k):zrank[:k] for k in (9,6,4,2)},'models':top,'probabilities':pred['probabilities'],'zodiacProbabilities':zp,'zodiacMap':m,'mappingNote':f'Predictor map uses only outcomes through {zthrough}; inferred residues={inferred}. Lunar-year boundary is held until observations confirm a new offset.','modelNote':'Prequential fixed-hyperparameter models: Dirichlet, exponential decay, Markov fallback, online softmax SGD, adaptive Hedge. Training labels are only already observed specials. Historical performance can remain at the uniform baseline or worse.','trainingState':{'n':s['n'],'throughExpect':s['through_expect'],'fingerprint':s['through_fingerprint'],'weightUpdates':max(0,s['n']-PARAMS['hedge_burnin']),'softmaxUpdates':s['softmax_updates'],'onlineLogLoss':s['train_loss']/max(1,s['softmax_updates']),'onlineBrier':s['train_brier']/max(1,s['softmax_updates']),'traceHash':s['trace_hash']}}
 
 def _wilson(h,n):
  if not n:return [0,1]

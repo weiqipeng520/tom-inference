@@ -61,13 +61,15 @@ async function openViewer(t, options = {}) {
   Object.defineProperty(win, 'localStorage', { value: { getItem: key => storage.get(key) || null, setItem: (key, value) => { if (options.storageFail) { const error = new Error('quota exceeded'); error.name = 'QuotaExceededError'; throw error; } storage.set(key, value); } } });
   win.fetch = async (url, init) => {
     requests.push({ url, init }); const response = queue.shift();
+    if (response?.stall) return new Promise(() => {});
     if (response instanceof Error) throw response;
     if (response && response.httpError) return { ok: false, status: response.httpError };
     if (response && response.invalidJSON) return { ok: true, status: 200, json: async () => { throw new SyntaxError('bad JSON'); } };
     return { ok: true, status: 200, json: async () => clone(response) };
   };
   win.setInterval = (fn, delay) => { intervals.push({ fn, delay }); return intervals.length; };
-  win.setTimeout = fn => { fn(); return 1; };
+  const nativeTimeout = win.setTimeout.bind(win);
+  win.setTimeout = (fn, delay) => delay === 12000 ? nativeTimeout(fn, options.fastTimeout ? 10 : delay) : (fn(), 1);
   win.Blob = Blob;
   win.URL.createObjectURL = blob => { downloads.push({ blob }); return `blob:fixture-${downloads.length}`; };
   win.URL.revokeObjectURL = () => {};
@@ -145,7 +147,7 @@ test('HTTP error and malformed JSON keep all previously displayed content and th
   assert.equal(page.storage.get(CACHE_KEY), stored);
   assert.match(page.doc.querySelector('#notice').textContent, /HTTP 503/);
   assert.match(page.doc.querySelector('#notice').textContent, /上次发布快照/);
-  assert.match(page.doc.querySelector('#publication-time').textContent, /发布于/);
+  assert.match(page.doc.querySelector('#publication-time').textContent, /快照生成/);
   await page.refresh({ invalidJSON: true });
   assert.deepEqual(fields.map(id => page.doc.getElementById(id).textContent), before);
   assert.equal(page.storage.get(CACHE_KEY), stored);
@@ -200,7 +202,7 @@ test('expired prediction and schedule are held, waiting label is prominent and n
   const page = await openViewer(t, { responses: [snapshot] });
   assert.equal(page.doc.querySelector('#forecast-expired').hidden, false);
   assert.match(page.doc.querySelector('#forecast-expired').textContent, /等待中央训练\/下一期/);
-  assert.match(page.doc.querySelector('#countdown').textContent, /等待中央开奖确认/);
+  assert.match(page.doc.querySelector('#countdown').textContent, /等待中央确认并发布开奖结果/);
   assert.match(page.doc.querySelector('#forecast-expect').textContent, /2026323/);
   assert.doesNotMatch(page.doc.querySelector('#forecast-expect').textContent, /2026324/);
   const before = page.doc.querySelector('#number-candidates').textContent;
@@ -296,7 +298,7 @@ test('static assets stay local, rendering is text-only and client has no inferen
   assert.doesNotMatch(script, /innerHTML|outerHTML|insertAdjacentHTML|document\.write|eval\(|new Function|Math\.random|crypto\.getRandomValues/);
   assert.doesNotMatch(script, /function\s+(?:train|predict|generateForecast|fitModel|softmax|sampleNumbers)\b/i);
   assert.equal((script.match(/\bfetch\(/g) || []).length, 1);
-  assert.match(script, /fetch\('\.\/data\.json', \{ cache: 'no-store' \}\)/);
+  assert.match(script, /fetch\('\.\/data\.json', \{ cache: 'no-store', signal: controller\.signal \}\)/);
   assert.match(css, /grid-template-columns:1\.12fr 1fr/);
   assert.match(css, /@media\(max-width:330px\)/);
   assert.match(css, /\.table-scroll\{overflow-x:auto/);
@@ -306,4 +308,15 @@ test('static assets stay local, rendering is text-only and client has no inferen
   assert.doesNotMatch(css, /(?:^|[;{])(?:width|min-width):100vw/);
   for (const rule of dom.window.document.styleSheets) assert.ok(rule);
   dom.window.close();
+});
+
+
+test('a timed-out publication request releases the polling lock', async t => {
+  const page = await openViewer(t, { responses: [{ stall: true }], fastTimeout: true });
+  await new Promise(resolve => setTimeout(resolve, 35));
+  assert.match(page.doc.querySelector('#notice').textContent, /请求超时/);
+  assert.equal(page.requests[0].init.signal.aborted, true);
+  await page.refresh(fixture());
+  assert.equal(page.requests.length, 2);
+  assert.equal(page.doc.querySelector('#connection-label').textContent, '已同步中央发布');
 });

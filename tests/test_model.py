@@ -42,6 +42,11 @@ class ModelTests(unittest.TestCase):
   self.assertAlmostEqual(a['brier'],sum((x-(1 if i==target else 0))**2 for i,x in enumerate(p)),12)
  def test_uniform_baseline_is_math_not_advertising(self):
   result=m.backtest(ROWS[-400:],holdout=10,burnin=365);a=next(x for x in result['algorithms'] if x['id']=='uniform');self.assertAlmostEqual(a['logLoss'],math.log(49),12)
+ def test_exported_loss_is_uncentered_and_uniform_is_log_49(self):
+  pred=m.generate(ROWS,'2026323',copy.deepcopy(self.state))
+  scores={r['id']:r['log_loss'] for r in pred['models']}
+  self.assertTrue(all(loss >= 0 for loss in scores.values()))
+  self.assertAlmostEqual(scores['uniform_expert'],math.log(49),10)
  def test_training_state_version_checked(self):
   state=copy.deepcopy(self.state);state['version']='mismatched'
   with self.assertRaises(ValueError):m.train(ROWS,state)

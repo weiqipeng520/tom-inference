@@ -1,18 +1,27 @@
 #!/usr/bin/env python3
 """One-writer train, freeze, settle and publish. Run from repository root."""
 from __future__ import annotations
-import argparse,copy,hashlib,json,os,shutil,sys,time
+import argparse,copy,hashlib,json,os,re,shutil,sys,tempfile,time
 from pathlib import Path
 from . import storage as st
+from .six_review import report as six_report,shadow_six
 from .source import normalize,fetch,expected_successor,gap_between,LATEST,HISTORY,PERIOD,SOURCE
 from models import tom_model as model
 
 ROOT=Path(__file__).resolve().parents[1]
 
 def read_json(path):return json.loads(Path(path).read_text(encoding='utf-8'))
+def atomic_output(path, writer):
+ path=Path(path);path.parent.mkdir(parents=True,exist_ok=True)
+ with tempfile.TemporaryDirectory(prefix='.tom-export-',dir=path.parent) as tmp:
+  candidate=Path(tmp)/path.name
+  writer(candidate)
+  os.replace(candidate,path)
+
 def write_json(path,value):
- path=Path(path);path.parent.mkdir(parents=True,exist_ok=True);text=st.dumps(value)+'\n'
- if not path.exists() or path.read_text(encoding='utf-8')!=text:path.write_text(text,encoding='utf-8')
+ path=Path(path);text=st.dumps(value)+'\n'
+ if not path.exists() or path.read_text(encoding='utf-8')!=text:
+  atomic_output(path,lambda candidate:candidate.write_text(text,encoding='utf-8'))
 
 def bootstrap(db,root,now):
  if db.execute('SELECT COUNT(*) FROM draws').fetchone()[0]:return False
@@ -35,56 +44,80 @@ def audit_fetch(db,record):
  db.execute('INSERT OR IGNORE INTO fetch_audit VALUES(?,?,?,?,?,?,?,?)',(key,record['url'],record['fetchedAt'],record['httpStatus'],record['rawSha'],record['rawJson'],st.PARSER_VERSION,st.dumps(record['errors'])))
 
 def acquire(db,now):
- current=st.draws(db);last=current[-1];year=int(st.iso(now)[:4]);warnings=[];success=False;audits=[];rows={};blocked_expects=set();block_forward=False
+ current=st.draws(db);last=current[-1];tip=last['expect'];year=int(st.iso(now)[:4]);warnings=[];audits=[];rows={};blocked_expects=set();parsed_any=False
+ def warn(error,url=None):
+  warnings.append({'url':url,**error} if url else error)
+  expect=str(error.get('expect','')).strip()
+  if error.get('error')!='wrong requested year' and re.fullmatch(r'[0-9]{7}',expect):
+   blocked_expects.add(expect)
  for url,requested_year in [(HISTORY.format(year=year),year),(LATEST,None)]:
   try:
-   parsed,record=fetch(url,now,requested_year);audit_fetch(db,record);audits.append(record['id']);success=success or bool(parsed)
-   for error in record['errors']:
-    # Known old source anomalies stay visible; malformed new observations block advancement below.
-    warnings.append({'url':url,**error})
-    if str(error.get('expect',''))>=last['expect'] or 'conflicting' in error.get('error',''):
-     block_forward=True;blocked_expects.add(str(error.get('expect','')))
+   parsed,record=fetch(url,now,requested_year);audit_fetch(db,record);audits.append(record['id']);parsed_any=parsed_any or bool(parsed)
+   for error in record['errors']:warn(error,url)
    for row in parsed:
-    old=rows.get(row['expect'])
-    if old and old!=row:
-     warnings.append({'expect':row['expect'],'error':'conflicting rows from source endpoints'});blocked_expects.add(row['expect']);block_forward=True
-    elif row['expect'] not in blocked_expects:rows[row['expect']]=row
+    expect=row['expect'];old=rows.get(expect)
+    if old and old!=row:warn({'expect':expect,'error':'conflicting rows from source endpoints'})
+    elif expect not in blocked_expects:rows[expect]=row
   except RuntimeError as e:warnings.append({'url':url,'error':str(e)})
- # Recover only gaps after the latest DB record, never re-create old forecasts.
- forward=sorted([r for r in rows.values() if r['expect']>last['expect']],key=lambda r:r['expect'])
- if forward:
-  cursor=last
+ def forward_block():return any(expect>=tip for expect in blocked_expects)
+ # Keep old conflicts quarantined. Only a conflict at the tip or ahead prevents forward ingestion.
+ forward=sorted((r for r in rows.values() if r['expect']>tip),key=lambda r:r['expect'])
+ cursor=last; remaining=12
+ if not forward_block():
   for candidate in forward:
-   hops=0
-   while gap_between(cursor,candidate) and hops<32:
+   while gap_between(cursor,candidate) and remaining:
     expect,_=expected_successor(cursor)
-    if expect>=candidate['expect']:break
-    url=PERIOD.format(expect=expect)
+    if expect>=candidate['expect'] or expect in blocked_expects:break
+    url=PERIOD.format(expect=expect);remaining-=1
     try:
-     parsed,record=fetch(url,now,int(expect[:4]));audit_fetch(db,record);match=[r for r in parsed if r['expect']==expect]
-     if len(match)!=1:break
-     rows[expect]=match[0];cursor=match[0];hops+=1
-    except RuntimeError:break
+     parsed,record=fetch(url,now,int(expect[:4]));audit_fetch(db,record);audits.append(record['id'])
+     for error in record['errors']:warn(error,url)
+     match=[r for r in parsed if r['expect']==expect]
+     if len(match)!=1 or forward_block():break
+     rows[expect]=match[0];cursor=match[0]
+    except RuntimeError as e:
+     warnings.append({'url':url,'error':str(e)});break
+   if forward_block() or gap_between(cursor,candidate):break
    cursor=candidate
- if blocked_expects:rows={k:r for k,r in rows.items() if k not in blocked_expects}
- if block_forward:rows={k:r for k,r in rows.items() if k<=last['expect']}
+ block_forward=forward_block()
+ rows={k:r for k,r in rows.items() if k not in blocked_expects and (not block_forward or k<=tip)}
+ success=parsed_any and bool(rows) and not block_forward and max(rows)>=tip
  return list(rows.values()),{'success':success,'blocked':block_forward,'blockedExpects':sorted(blocked_expects),'checkedAt':st.iso(now),'lastSuccess':st.iso(now) if success else None,'source':SOURCE,'warnings':warnings,'audits':audits}
 
 def ingest(db,rows,now,source='specified-api'):
  added=[];conflicts=[];gaps=[];current=st.draws(db);last=current[-1] if current else None
- for row in sorted(rows,key=lambda r:r['expect']):
-  row=normalize(row)
+ known={r['expect']:r for r in current}; batch={}; duplicates=set()
+ for raw in rows:
+  row=normalize(raw);key=row['expect']
   if st.epoch(row['openTime'])>now:raise ValueError('future actual result')
+  if key in batch and batch[key]!=row:duplicates.add(key)
+  if key not in batch:batch[key]=row
+ conflicts=sorted(duplicates)
+ # Compare the whole batch with the ledger before writing anything. A conflicting
+ # current/future draw blocks every forward insert from that same response.
+ for key,row in batch.items():
+  old=known.get(key)
+  if old is not None and old!=row:
+   st.insert_draw(db,row,now,source)  # Existing key: audit conflict, never replace.
+   if key not in conflicts:conflicts.append(key)
+ conflicts.sort()
+ blocked=bool(last and any(key>=last['expect'] for key in conflicts))
+ for row in sorted(batch.values(),key=lambda r:r['expect']):
+  if row['expect'] in conflicts:continue
+  if blocked and last and row['expect']>last['expect']:continue
   exists=db.execute('SELECT payload_json FROM draws WHERE expect=?',(row['expect'],)).fetchone()
-  if exists:
-   result=st.insert_draw(db,row,now,source)
-   if result=='conflict':conflicts.append(row['expect'])
-   continue
+  if exists:continue
   # Late historical repairs are imported as history only; trigger replay, never retrospective public forecasts.
   if last and row['expect']>last['expect']:
    gap=gap_between(last,row)
    if gap:gaps.append(gap);continue
-  result=st.insert_draw(db,row,now,source)
+  key=row['expect']
+  lower=max((k for k in known if k<key),default=None)
+  upper=min((k for k in known if k>key),default=None)
+  when=st.epoch(row['openTime'])
+  if (lower and st.epoch(known[lower]['openTime'])>=when) or (upper and st.epoch(known[upper]['openTime'])<=when):
+   gaps.append({'received':key,'error':'draw time is out of order'});continue
+  result=st.insert_draw(db,row,now,source);known[key]=row
   if result=='inserted':added.append(row['expect'])
   if not last or row['expect']>last['expect']:last=row
  return added,conflicts,gaps
@@ -117,13 +150,18 @@ def next_forecast(db,state,now,blocked=False,clock=None):
  if deadline-now>26*3600000:return None,False,'source-ahead-of-clock'
  p=model.generate(rows,target,state=copy.deepcopy(state));created_at=clock() if clock else now
  if created_at>=deadline:return None,False,'target-deadline-passed-awaiting-draw'
+ p['shadowSix']=shadow_six(p)
+ created_at=clock() if clock else now
+ if created_at>=deadline:return None,False,'target-deadline-passed-awaiting-draw'
  envelope={'targetExpect':target,'createdAt':created_at,'expectedOpenTime':deadline,'source':'central-github-action','origin':'central','prediction':p,'modelVersion':model.VERSION,'releaseEvidence':'生成时间由runner记录；首次Pages部署由独立receipt记入数据库'}
  env,created=st.lock_forecast(db,envelope);return env,created,'frozen-existing'
 
 def snapshot(db,root,now):
  rows=st.draws(db);all_forecasts=st.forecasts(db);latest=rows[-1];target,deadline=expected_successor(latest);current=next((f for f in all_forecasts if f['targetExpect']==target),None);training=st.get_meta(db,'training_manifest',{});backtest=training.get('backtest');training={k:v for k,v in training.items() if k!='backtest'}
- base={'schemaVersion':1,'system':{'name':'Tom推演系统','version':'3.0.0'},'publication':{'generatedAt':st.iso(st.get_meta(db,'last_business_change',now)),'lastTrainingAt':training.get('lastTrainingAt'),'sync':st.get_meta(db,'sync',{}),'consistency':'同一期号只有一个冻结digest；同snapshotId读取相同数据。Pages部署/CDN传播可能短暂显示旧版，页面会标明版本。'},'latestDraw':latest,'nextDraw':{'expect':target,'expectedOpenTime':deadline,'estimated':True,'timezone':'Asia/Shanghai','scheduleVersion':'daily-source-assumption-1','timeBasis':'指定来源未声明时区；按业务配置UTC+8解释，默认每日21:32:32估算'},'currentForecast':current,'forecasts':all_forecasts,'settlements':st.latest_settlements(db),'training':training,'backtest':backtest,'legacyBacktest':st.get_meta(db,'legacy_backtest'),'draws':rows,'coverage':st.get_meta(db,'coverage',{}),'runtime':{'status':st.get_meta(db,'runtime_status','ready'),'firstPublicationReceipts':[dict(r) for r in db.execute('SELECT * FROM publication_receipts ORDER BY expect')],'sourceConflictCount':db.execute('SELECT COUNT(*) FROM draw_conflicts').fetchone()[0],'centralLedger':'SQLite database/tom.sqlite, written by one serialized GitHub Actions workflow; visitors read-only'}}
- base['publication']['snapshotId']=st.sha(base);write_json(root/'site/data.json',base)
+ base={'schemaVersion':1,'system':{'name':'Tom推演系统','version':'3.1.0','focus':'six-zodiac'},'publication':{'generatedAt':st.iso(st.get_meta(db,'last_business_change',now)),'lastTrainingAt':training.get('lastTrainingAt'),'sync':st.get_meta(db,'sync',{}),'consistency':'同一期号只有一个冻结digest；同snapshotId读取相同数据。Pages部署/CDN传播可能短暂显示旧版，页面会标明版本。'},'latestDraw':latest,'nextDraw':{'expect':target,'expectedOpenTime':deadline,'estimated':True,'timezone':'Asia/Shanghai','scheduleVersion':'daily-source-assumption-1','timeBasis':'指定来源未声明时区；按业务配置UTC+8解释，默认每日21:32:32估算'},'currentForecast':current,'forecasts':all_forecasts,'settlements':st.latest_settlements(db),'training':training,'backtest':backtest,'legacyBacktest':st.get_meta(db,'legacy_backtest'),'draws':rows,'coverage':st.get_meta(db,'coverage',{}),'runtime':{'status':st.get_meta(db,'runtime_status','ready'),'firstPublicationReceipts':[dict(r) for r in db.execute('SELECT * FROM publication_receipts ORDER BY expect')],'sourceConflictCount':db.execute('SELECT COUNT(*) FROM draw_conflicts').fetchone()[0],'centralLedger':'SQLite database/tom.sqlite, written by one serialized GitHub Actions workflow; visitors read-only'}}
+ base['coverage']={**base['coverage'],'total':len(rows),'rangeStart':rows[0]['openTime'],'rangeEnd':latest['openTime']}
+ base['sixReview']=six_report(all_forecasts,base['settlements'])
+ base['publication']['snapshotId']=st.sha(base)
  for env in all_forecasts:
   path=root/'database/forecasts'/f"{env['targetExpect']}.json"
   if path.exists() and read_json(path)!=env:raise ValueError('frozen file conflict '+str(path))
@@ -133,30 +171,46 @@ def snapshot(db,root,now):
  write_json(root/'database/training/latest.json',training)
  return base
 
-def run(root=ROOT,offline=False,now=None,incoming=None):
+def run(root=ROOT,offline=False,now=None,incoming=None,apply_correction=None):
  root=Path(root);fixed_now=now is not None;now=int(time.time()*1000) if now is None else now;clock=(lambda:now) if fixed_now else (lambda:int(time.time()*1000));db=st.connect(root/'database/tom.sqlite');result={}
  try:
   with db:
+   db.execute('BEGIN IMMEDIATE')
    seeded=bootstrap(db,root,now)
+   adjusted=bool(apply_correction and apply_correction(db))
+   tip=st.draws(db)[-1]['expect']
    if incoming is not None:batch=incoming;sync={'success':True,'checkedAt':st.iso(now),'lastSuccess':st.iso(now),'warnings':[],'source':'test-fixture'}
    elif offline:batch=[];sync=st.get_meta(db,'sync',{'success':False,'checkedAt':st.iso(now),'lastSuccess':None,'warnings':['离线构建：当前为打包时中央快照，启用Actions后首次同步指定来源'],'source':SOURCE})
    else:batch,sync=acquire(db,now)
    added,conflicts,gaps=ingest(db,batch,now)
    if conflicts:sync['warnings'].append({'error':'draw conflicts quarantined, original retained','expects':conflicts})
    if gaps:sync['warnings'].extend(gaps)
-   sync_changed=False;previous_sync=st.get_meta(db,'sync')
-   if seeded or added or conflicts or gaps or sync.get('blocked') or previous_sync is None or previous_sync.get('success')!=sync['success'] or previous_sync.get('blocked')!=sync.get('blocked'):sync_changed=st.set_meta(db,'sync',sync)
+   relevant_conflict=any(expect>=tip for expect in conflicts)
+   forward_gap=any(g.get('received','')>=tip for g in gaps)
+   blocked=relevant_conflict or forward_gap or sync.get('blocked',False)
+   sync_changed=False;previous_sync=st.get_meta(db,'sync',{})
+   if blocked:sync={**sync,'success':False,'blocked':True}
+   if not sync['success']:sync['lastSuccess']=previous_sync.get('lastSuccess')
+   # Real fetches always advance check telemetry; fixture/quiet offline runs remain idempotent.
+   if (not offline and incoming is None) or seeded or added or conflicts or gaps or not previous_sync or any(previous_sync.get(k)!=sync.get(k) for k in ('success','blocked')):
+    sync_changed=st.set_meta(db,'sync',sync)
    state,trained=train_db(db,now);settled=st.settle(db,now)
-   forecast,created,status=next_forecast(db,state,clock(),bool(conflicts or gaps or sync.get('blocked') or (not offline and not sync.get('success'))),clock=clock)
+   forecast,created,status=next_forecast(db,state,clock(),bool(blocked or (not offline and not sync.get('success'))),clock=clock)
    status_changed=st.set_meta(db,'runtime_status',status)
-   changed=seeded or bool(added) or trained or settled or created or sync_changed or status_changed
+   changed=adjusted or seeded or bool(added) or trained or settled or created or sync_changed or status_changed
    if changed:st.set_meta(db,'last_business_change',now)
    st.integrity(db)
-  content=snapshot(db,root,now);db.commit();st.integrity(db);db.close();db=None
+   for env in st.forecasts(db):
+    path=root/'database/forecasts'/f"{env['targetExpect']}.json"
+    if path.exists() and read_json(path)!=env:raise ValueError('frozen file conflict '+str(path))
+  # Replay and settlement are committed together before any public exports.
+  content=snapshot(db,root,now);db.close();db=None
   # Copy closed rollback-journal SQLite file: no WAL sidecar needed for persistence.
   export=root/'site/data/tom.sqlite';export.parent.mkdir(parents=True,exist_ok=True);source=root/'database/tom.sqlite'
-  if not export.exists() or hashlib.sha256(export.read_bytes()).digest()!=hashlib.sha256(source.read_bytes()).digest():shutil.copy2(source,export)
-  result={'changed':bool(changed),'added':added,'trained':trained,'newForecast':created,'forecastTarget':forecast['targetExpect'] if forecast else None,'conflicts':conflicts,'gaps':gaps,'status':status,'snapshotId':content['publication']['snapshotId'],'latest':content['latestDraw']['expect']}
+  if not export.exists() or hashlib.sha256(export.read_bytes()).digest()!=hashlib.sha256(source.read_bytes()).digest():
+    atomic_output(export,lambda candidate:shutil.copy2(source,candidate))
+  write_json(root/'site/data.json',content)
+  result={'changed':bool(changed),'corrected':adjusted,'added':added,'trained':trained,'newForecast':created,'forecastTarget':forecast['targetExpect'] if forecast else None,'conflicts':conflicts,'gaps':gaps,'status':status,'snapshotId':content['publication']['snapshotId'],'latest':content['latestDraw']['expect']}
   print(st.dumps(result));return result
  finally:
   if db is not None:db.close()

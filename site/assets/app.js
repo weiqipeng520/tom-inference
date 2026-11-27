@@ -81,10 +81,22 @@
   async function refreshSnapshot() {
     if (state.loading) return;
     state.loading = true;
+    const controller = new AbortController();
+    let timer;
     try {
-      const response = await fetch('./data.json', { cache: 'no-store' });
-      if (!response.ok) throw new Error(`HTTP ${response.status}`);
-      const incoming = validateSnapshot(await response.json());
+      const read = async () => {
+        const response = await fetch('./data.json', { cache: 'no-store', signal: controller.signal });
+        if (!response.ok) throw new Error(`HTTP ${response.status}`);
+        return validateSnapshot(await response.json());
+      };
+      const timeout = new Promise((_, reject) => {
+        timer = window.setTimeout(() => { reject(new Error('请求超时')); controller.abort(); }, 12000);
+      });
+      const incoming = await Promise.race([read(), timeout]);
+      const previous = state.snapshot;
+      if (previous && toEpoch(incoming.publication.generatedAt) < toEpoch(previous.publication.generatedAt)) {
+        throw new Error('发布节点返回了比当前快照更早的数据');
+      }
       const conflict = digestConflict(incoming);
       if (conflict) {
         state.conflict = conflict; state.error = ''; state.offline = true; renderNotice(); return;
@@ -96,7 +108,7 @@
       state.error = `发布读取失败（${text(error.message)}），${state.snapshot ? '保留上次完整发布。' : '暂无可展示的真实发布数据。'}`;
       if (window.location.protocol === 'file:') state.error += ' 本地 file:// 请在仓库根目录运行 python3 -m http.server 8000 后访问 http://localhost:8000/site/，或打开部署后的 GitHub Pages 网址。';
       renderNotice();
-    } finally { state.loading = false; }
+    } finally { window.clearTimeout(timer); state.loading = false; }
   }
   function ballClass(wave) {
     return ({ red: 'red', blue: 'blue', green: 'green', '红': 'red', '紅': 'red', '蓝': 'blue', '藍': 'blue', '绿': 'green', '綠': 'green' })[wave] || '';
@@ -134,7 +146,10 @@
       countdown.textContent = '--:--:--'; set('schedule-label', '中央尚未发布预计时间');
     } else {
       set('schedule-label', `第 ${text(schedule.expect)} 期 · 预计 ${time(epoch)} UTC+8${schedule.estimated ? '（估计）' : ''}`);
-      if (remaining <= 0) countdown.textContent = '等待中央开奖确认';
+      if (remaining <= 0) {
+        const sync = state.snapshot.publication.sync || {};
+        countdown.textContent = sync.blocked ? '有冲突或缺期，等待核对' : sync.success === false ? '取数失败，保留已发布开奖' : '等待中央确认并发布开奖结果';
+      }
       else {
         const seconds = Math.floor(remaining / 1000);
         const hours = Math.floor(seconds / 3600);
@@ -230,7 +245,15 @@
       const valid = eligible.filter(item => typeof item[group]?.[size] === 'boolean');
       return [valid.filter(item => item[group][size]).length, valid.length];
     }
-    replace('live-summary', [liveStat('16 码实时', ...aggregate('numberHits', '16')), liveStat('6 肖实时', ...aggregate('zodiacHits', '6'))]);
+    const focused = snapshot.system?.focus === 'six-zodiac';
+    $('number-result-heading').hidden = focused;
+    replace('live-summary', [...(focused ? [] : [liveStat('16 码实时', ...aggregate('numberHits', '16'))]), liveStat('6 肖前瞻', ...aggregate('zodiacHits', '6'))]);
+    const review = snapshot.sixReview;
+    $('six-review').hidden = !review;
+    if (review) {
+      const range = review.wilson95 ? ` · 95% Wilson 区间 ${review.wilson95.map(percent).join('–')}` : '';
+      set('six-review', `六肖 ${review.hits}/${review.total} · 冻结映射覆盖基线 ${percent(review.coverageBaseline)}${range} · 映射与实际不一致 ${review.mappingMismatchCount} 期 · ${review.shadow.pairedTotal ? `同期对照：现行 ${review.shadow.liveHits}/${review.shadow.pairedTotal}，候选 ${review.shadow.shadowHits}/${review.shadow.pairedTotal}` : '并行候选尚无前瞻开奖样本'}（仅观察，不替换当前策略）`);
+    }
     const expects = [...new Set([...envelopes.keys(), ...settlements.keys()])].sort((a, b) => b.localeCompare(a, 'en', { numeric: true }));
     replace('forecast-records', expects.length ? expects.slice(0, 30).map(expect => {
       const envelope = envelopes.get(expect); const settled = settlements.get(expect); const row = node('tr');
@@ -256,10 +279,17 @@
     const split = report.split || {};
     set('backtest-count', `${count(split.testCount)} 期留出集`);
     set('backtest-split', `${text(report.modelVersion)} · 第 ${text(split.testFirst)} — ${text(split.testLast)} 期 · ${text(split.method)}`);
-    const numberSize = $('backtest-number-size').value; const zodiacSize = $('backtest-zodiac-size').value;
+    const focused = state.snapshot.system?.focus === 'six-zodiac';
+    $('backtest-number-control').hidden = focused;
+    $('backtest-zodiac-control').hidden = focused;
+    $('backtest-number-heading').hidden = focused;
+    const numberSize = $('backtest-number-size').value;
+    const zodiacSize = focused ? '6' : $('backtest-zodiac-size').value;
     replace('backtest-rows', list(report.algorithms).length ? report.algorithms.map(algorithm => {
       const row = node('tr'); const number = algorithm.numberHits?.[numberSize]; const zodiac = algorithm.zodiacHits?.[zodiacSize];
-      row.append(node('td', algorithm.name || algorithm.id), node('td', hitText(number)), node('td', number ? `${percent(number.baseline)} / ${percent(number.wilsonLow)}–${percent(number.wilsonHigh)}` : '—'), node('td', hitText(zodiac)), node('td', fixed(algorithm.logLoss)), node('td', fixed(algorithm.brier)));
+      const numberCell = node('td', hitText(number)); numberCell.hidden = focused;
+      const interval = focused ? zodiac : number;
+      row.append(node('td', algorithm.name || algorithm.id), numberCell, node('td', interval ? `${percent(interval.baseline)} / ${percent(interval.wilsonLow)}–${percent(interval.wilsonHigh)}` : '—'), node('td', hitText(zodiac)), node('td', fixed(algorithm.logLoss)), node('td', fixed(algorithm.brier)));
       if (algorithm.id === 'ensemble') row.className = 'ensemble-row';
       return row;
     }) : [emptyRow(6, '回测算法报告待发布')]);
@@ -291,7 +321,7 @@
     const snapshot = state.snapshot; const draws = list(snapshot.draws); const coverage = snapshot.coverage || {};
     set('history-total', `${count(draws.length)} 条`);
     function stat(value, label, small) { const result = node('div', null, 'history-stat'); result.append(node('strong', text(value), small ? 'small' : ''), node('span', label)); return result; }
-    replace('history-stats', [stat(count(draws.length), '已发布历史样本'), stat(coverage.rangeStart || draws[0]?.openTime || '—', '覆盖起点', true), stat(coverage.rangeEnd || draws[draws.length - 1]?.openTime || '—', '覆盖终点', true)]);
+    replace('history-stats', [stat(count(draws.length), '已发布历史样本'), stat(draws[0]?.openTime || coverage.rangeStart || '—', '覆盖起点', true), stat(draws[draws.length - 1]?.openTime || coverage.rangeEnd || '—', '覆盖终点', true)]);
     const frequencies = Array(49).fill(0);
     for (const draw of draws) {
       const special = Number(list(draw.numbers)[6]);
@@ -308,11 +338,12 @@
   }
   function renderPublication() {
     const snapshot = state.snapshot; const publication = snapshot.publication; const sync = publication.sync || {};
-    set('publication-time', `发布于 ${time(publication.generatedAt)} UTC+8`);
+    set('publication-time', `快照生成 ${time(publication.generatedAt)} UTC+8`);
     set('snapshot-id', publication.snapshotId);
     set('sync-time', `${time(sync.checkedAt)} / ${time(sync.lastSuccess)} UTC+8`);
     set('source-label', sync.source || snapshot.coverage?.source);
     const warnings = list(sync.warnings).map(item => typeof item === 'string' ? item : JSON.stringify(item));
+    if (sync.blocked) warnings.unshift('有新期数据冲突或缺期，未继续入库。');
     if (sync.success === false) warnings.unshift('中央源同步未成功；本页仅展示已发布快照，请核对最后成功时间。');
     replace('publication-warnings', warnings.map(warning => node('li', warning)));
     $('download-snapshot').disabled = false;
@@ -320,6 +351,11 @@
     $('download-csv').disabled = !list(snapshot.draws).length;
   }
   function renderSnapshot() {
+    const focused = state.snapshot.system?.focus === 'six-zodiac';
+    document.documentElement.classList.toggle('six-focus', focused);
+    $('number-column').hidden = focused;
+    $('zodiac-tabs').hidden = focused;
+    if (focused) state.zodiacSize = 6;
     renderDraw(); renderForecast(); renderTraining(); renderRecords(); renderBacktest(); renderHistoryStats(); renderPublication(); tick(); renderNotice();
   }
   function download(filename, content, mime) {
@@ -339,7 +375,7 @@
       tabs.addEventListener('click', event => {
         const button = event.target.closest('button[data-size]'); if (!button || !tabs.contains(button)) return;
         const size = Number(button.dataset.size);
-        if (!(group === 'number' ? NUMBER_SIZES : ZODIAC_SIZES).includes(size)) return;
+        if (state.snapshot?.system?.focus === 'six-zodiac' || !(group === 'number' ? NUMBER_SIZES : ZODIAC_SIZES).includes(size)) return;
         state[group === 'number' ? 'numberSize' : 'zodiacSize'] = size; renderCandidates();
       });
       tabs.addEventListener('keydown', event => {

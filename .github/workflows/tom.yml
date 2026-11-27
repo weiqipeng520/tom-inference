@@ -1,1 +1,92 @@
-{"name":"Tom","on":{"workflow_dispatch":{},"push":{"branches":["main"]},"schedule":[{"cron":"37,52 13 * * *"},{"cron":"17 14-16 * * *"},{"cron":"17 0 * * *"}]},"concurrency":{"group":"tom-central","cancel-in-progress":false},"permissions":{"contents":"write","pages":"write","id-token":"write"},"jobs":{"publish":{"runs-on":"ubuntu-latest","timeout-minutes":15,"environment":{"name":"github-pages","url":"${{ steps.deploy.outputs.page_url }}"},"steps":[{"uses":"actions/checkout@v6","with":{"ref":"main","fetch-depth":0}},{"uses":"actions/setup-python@v6","with":{"python-version":"3.12"}},{"name":"Install","run":"test -f scripts/pipeline.py || python -m zipfile -e tom-repository.zip ."},{"name":"Test","run":"python -m unittest discover -s tests -p 'test_*.py' -v"},{"name":"Train","run":"python -m scripts.pipeline && python -m scripts.verify"},{"name":"Save","run":"git config user.name tom-bot; git config user.email tom-bot@users.noreply.github.com; git add -A; if ! git diff --cached --quiet; then git commit -m 'data: update Tom' && git push origin HEAD:main; fi"},{"uses":"actions/configure-pages@v5"},{"uses":"actions/upload-pages-artifact@v4","with":{"path":"site"}},{"id":"deploy","uses":"actions/deploy-pages@v4"},{"name":"Receipt","run":"python -m scripts.mark_published --run-id $GITHUB_RUN_ID --commit-sha $(git rev-parse HEAD); git add database/tom.sqlite; if ! git diff --cached --quiet; then git commit -m 'data: record publication' && git push origin HEAD:main; fi"}]}}}
+{
+  "name": "Tom",
+  "on": {
+    "workflow_dispatch": {},
+    "push": {
+      "branches": [
+        "main"
+      ]
+    },
+    "schedule": [
+      {
+        "cron": "37,47,57 13 * * *"
+      },
+      {
+        "cron": "7,17,27,37,47,57 14 * * *"
+      },
+      {
+        "cron": "17 15-16 * * *"
+      },
+      {
+        "cron": "17 0 * * *"
+      }
+    ]
+  },
+  "concurrency": {
+    "group": "tom-central",
+    "cancel-in-progress": false
+  },
+  "permissions": {
+    "contents": "write",
+    "pages": "write",
+    "id-token": "write"
+  },
+  "jobs": {
+    "publish": {
+      "runs-on": "ubuntu-latest",
+      "timeout-minutes": 15,
+      "environment": {
+        "name": "github-pages",
+        "url": "${{ steps.deploy.outputs.page_url }}"
+      },
+      "steps": [
+        {
+          "uses": "actions/checkout@v6",
+          "with": {
+            "ref": "main",
+            "fetch-depth": 0
+          }
+        },
+        {
+          "uses": "actions/setup-python@v6",
+          "with": {
+            "python-version": "3.12"
+          }
+        },
+        {
+          "name": "Install",
+          "run": "test -f scripts/pipeline.py || python -m zipfile -e tom-repository.zip ."
+        },
+        {
+          "name": "Test",
+          "run": "python -m unittest discover -s tests -p 'test_*.py' -v"
+        },
+        {
+          "name": "Train",
+          "run": "python -m scripts.pipeline && python -m scripts.verify"
+        },
+        {
+          "name": "Save",
+          "run": "git config user.name tom-bot; git config user.email tom-bot@users.noreply.github.com; git add -A; if ! git diff --cached --quiet; then git commit -m 'data: update Tom' && git push origin HEAD:main; fi"
+        },
+        {
+          "uses": "actions/configure-pages@v5"
+        },
+        {
+          "uses": "actions/upload-pages-artifact@v4",
+          "with": {
+            "path": "site"
+          }
+        },
+        {
+          "id": "deploy",
+          "uses": "actions/deploy-pages@v4"
+        },
+        {
+          "name": "Receipt",
+          "run": "python -m scripts.mark_published --run-id $GITHUB_RUN_ID --commit-sha $(git rev-parse HEAD); git add database/tom.sqlite; if ! git diff --cached --quiet; then git commit -m 'data: record publication' && git push origin HEAD:main; fi"
+        }
+      ]
+    }
+  }
+}

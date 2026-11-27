@@ -99,5 +99,11 @@ def settle(db,received):
 def integrity(db):
  if db.execute('PRAGMA integrity_check').fetchone()[0]!='ok':raise ValueError('SQLite integrity failed')
  if db.execute('PRAGMA foreign_key_check').fetchall():raise ValueError('SQLite foreign key failed')
- for env in forecasts(db):validate_forecast(env)
+ for row in db.execute('SELECT expect,digest,payload_json FROM forecasts ORDER BY expect'):
+  env=validate_forecast(json.loads(row['payload_json']))
+  if env['targetExpect']!=row['expect'] or env['prediction']['targetExpect']!=row['expect'] or env['digest']!=row['digest']:
+   raise ValueError('frozen forecast metadata mismatch')
+  if env.get('origin')=='central':
+   expected=sha({'createdAt':env['createdAt'],'expectedOpenTime':env['expectedOpenTime'],'source':env['source'],'prediction':env['prediction']})
+   if env['digest']!=expected:raise ValueError('frozen forecast digest mismatch')
  return True
