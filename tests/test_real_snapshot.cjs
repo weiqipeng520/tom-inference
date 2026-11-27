@@ -1,10 +1,60 @@
 'use strict';
-const fs=require('node:fs'),path=require('node:path'),assert=require('node:assert/strict');let JSDOM,VirtualConsole;
-for(const name of [path.join(__dirname,'../.test-tools/node_modules/jsdom'),'/root/workspace/macaujc-predict-20261119/.test-tools/node_modules/jsdom','jsdom']){try{({JSDOM,VirtualConsole}=require(name));break;}catch{}}
-if(!JSDOM)throw Error('Install jsdom test dependency');
-const root=path.resolve(__dirname,'..'),html=fs.readFileSync(root+'/site/index.html','utf8'),script=fs.readFileSync(root+'/site/assets/app.js','utf8'),snapshot=JSON.parse(fs.readFileSync(root+'/site/data.json','utf8'));
-function open(){const errors=[],vc=new VirtualConsole();vc.on('jsdomError',e=>errors.push(e.message));const dom=new JSDOM(html,{url:'https://tom-example.github.io/tom-inference/',runScripts:'outside-only',pretendToBeVisual:true,virtualConsole:vc});dom.window.fetch=async url=>{assert.equal(url,'./data.json');return {ok:true,status:200,json:async()=>JSON.parse(JSON.stringify(snapshot))};};dom.window.eval(script);return {dom,errors};}
-(async()=>{const a=open(),b=open();await new Promise(resolve=>setImmediate(resolve));await new Promise(resolve=>setImmediate(resolve));const doc=a.dom.window.document;
-assert.deepEqual(a.errors,[]);assert.deepEqual(b.errors,[]);assert.equal(doc.title,'Tom推演系统');assert.equal(doc.getElementById('forecast-digest').textContent,snapshot.currentForecast.digest);assert.equal(doc.querySelectorAll('#latest-balls .ball').length,7);assert.equal(doc.querySelectorAll('#model-weights .weight-item').length,5);assert.equal(doc.querySelectorAll('#score-grid .score-cell').length,49);assert.equal(doc.querySelectorAll('#backtest-rows tr').length,7);assert.match(doc.getElementById('history-total').textContent,/2,372|2，372|2372/);
-for(const [group,sizes]of [['number',[36,24,16,8,4]],['zodiac',[9,6,4,2]]])for(const n of sizes){for(const visitor of [a,b])visitor.dom.window.document.querySelector(`#${group}-tabs [data-size="${n}"]`).click();const list=d=>[...d.querySelectorAll(`#${group}-candidates .candidate-${group}`)].map(x=>x.textContent);assert.equal(list(doc).length,n);assert.deepEqual(list(doc),list(b.dom.window.document));}
-console.log(JSON.stringify({passed:true,realDraws:snapshot.draws.length,currentTarget:snapshot.currentForecast.targetExpect,digest:snapshot.currentForecast.digest,snapshotId:snapshot.publication.snapshotId,independentVisitorsAgree:true,modelCount:5,backtestRows:7}));a.dom.window.close();b.dom.window.close();})().catch(e=>{console.error(e);process.exitCode=1;});
+const fs = require('node:fs');
+const path = require('node:path');
+const assert = require('node:assert/strict');
+let domLib;
+for (const name of [path.join(__dirname, '../.test-tools/node_modules/jsdom'), 'jsdom']) {
+  try { domLib = require(name); break; } catch (err) { if (err.code !== 'MODULE_NOT_FOUND') throw err; }
+}
+if (!domLib) throw Error('Install jsdom test dependency');
+const { JSDOM, VirtualConsole } = domLib;
+const site = path.resolve(process.argv[2] || path.join(__dirname, '../site'));
+const html = fs.readFileSync(path.join(site, 'index.html'), 'utf8');
+const script = fs.readFileSync(path.join(site, 'assets/app.js'), 'utf8');
+const snapshot = JSON.parse(fs.readFileSync(path.join(site, 'data.json'), 'utf8'));
+const visitors = [];
+function open() {
+  const errors = [], vc = new VirtualConsole();
+  vc.on('jsdomError', e => errors.push(e.message));
+  const dom = new JSDOM(html, { url: 'https://tom-example.github.io/tom-inference/', runScripts: 'outside-only', pretendToBeVisual: true, virtualConsole: vc });
+  visitors.push(dom);
+  dom.window.fetch = async url => {
+    assert.equal(url, './data.json');
+    return { ok: true, status: 200, json: async () => structuredClone(snapshot) };
+  };
+  dom.window.eval(script);
+  return { doc: dom.window.document, errors };
+}
+(async () => {
+  try {
+    const a = open(), b = open();
+    await new Promise(resolve => setImmediate(resolve));
+    const focused = snapshot.system?.focus === 'six-zodiac';
+    for (const { doc, errors } of [a, b]) {
+      assert.deepEqual(errors, []);
+      assert.equal(doc.title, 'Tom推演系统');
+      assert.equal(doc.getElementById('forecast-digest').textContent, snapshot.currentForecast?.digest ?? '—');
+      assert.equal(doc.querySelectorAll('#latest-balls .ball').length, 7);
+      assert.equal(doc.querySelectorAll('#model-weights .weight-item').length, snapshot.training.models.length);
+      assert.equal(doc.querySelectorAll('#score-grid .score-cell').length, snapshot.currentForecast ? 49 : 0);
+      assert.equal(doc.querySelectorAll('#backtest-rows tr').length, snapshot.backtest.algorithms.length);
+      assert.equal(doc.getElementById('history-total').textContent, `${snapshot.draws.length.toLocaleString('zh-CN')} 条`);
+      if (focused) {
+        for (const id of ['number-column', 'zodiac-tabs', 'backtest-number-control', 'backtest-zodiac-control']) assert.equal(doc.getElementById(id).hidden, true, id);
+        assert.equal(doc.getElementById('six-review').hidden, false);
+        assert.deepEqual([...doc.querySelectorAll('#zodiac-candidates .candidate-zodiac')].map(el => el.lastChild.textContent), snapshot.currentForecast?.prediction.zodiacSets['6'] ?? []);
+      }
+    }
+    if (!focused && snapshot.currentForecast) {
+      for (const [group, sizes] of [['number', [36, 24, 16, 8, 4]], ['zodiac', [9, 6, 4, 2]]]) {
+        for (const n of sizes) {
+          for (const {doc} of [a, b]) doc.querySelector(`#${group}-tabs [data-size="${n}"]`).click();
+          const get = doc => [...doc.querySelectorAll(`#${group}-candidates .candidate-${group}`)].map(el => el.textContent);
+          assert.equal(get(a.doc).length, n);
+          assert.deepEqual(get(a.doc), get(b.doc));
+        }
+      }
+    }
+    console.log(JSON.stringify({ passed: true, realDraws: snapshot.draws.length, currentTarget: snapshot.currentForecast?.targetExpect, independentVisitorsAgree: true, focused }));
+  } finally { visitors.forEach(dom => dom.window.close()); }
+})().catch(err => { console.error(err); process.exitCode = 1; });

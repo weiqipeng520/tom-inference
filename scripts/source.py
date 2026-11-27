@@ -2,7 +2,8 @@
 """Bounded read-only fetches from the user-specified source, never a gambling transaction."""
 from __future__ import annotations
 import json,re,time,urllib.request,urllib.error,hashlib
-from datetime import datetime,timedelta,timezone
+from http.client import HTTPException
+from datetime import datetime,timedelta
 from .storage import epoch,dumps,sha,PARSER_VERSION
 
 SOURCE='https://macaujc.com/macaujc2/'
@@ -18,7 +19,8 @@ def normalize(raw,year=None):
  if not re.fullmatch(r'\d{7}',exp) or int(exp[4:])<1:raise ValueError('bad period')
  if raw.get('type') is not None and str(raw['type'])!='8':raise ValueError('unexpected lottery type')
  when=str(raw.get('openTime','')).strip();datetime.strptime(when,'%Y-%m-%d %H:%M:%S')
- if when[:4]!=exp[:4] or (year is not None and int(exp[:4])!=year):raise ValueError('wrong period/date/requested year')
+ if when[:4]!=exp[:4]:raise ValueError('wrong period/date year')
+ if year is not None and int(exp[:4])!=year:raise ValueError('wrong requested year')
  values=raw.get('numbers',raw.get('openCode',''))
  if not isinstance(values,(str,list)):raise ValueError('numbers must be list or CSV text')
  values=values if isinstance(values,list) else values.split(',')
@@ -44,7 +46,6 @@ def decode_payload(payload):
  raise ValueError('API payload status/data invalid')
 
 def fetch(url,now,year=None):
- started=time.time()
  for attempt in range(2):
   try:
    request=urllib.request.Request(url,headers={'User-Agent':'Mozilla/5.0 (Tom historical inference)','Accept':'application/json','Referer':SOURCE})
@@ -67,7 +68,7 @@ def fetch(url,now,year=None):
    valid=[r for r in valid if r['expect'] not in conflicting]
    record={'id':'sha256:'+hashlib.sha256(body).hexdigest(),'url':url,'fetchedAt':now,'httpStatus':status,'rawSha':'sha256:'+hashlib.sha256(body).hexdigest(),'rawJson':text,'errors':errors,'validCount':len(valid)}
    return valid,record
-  except (OSError,ValueError,urllib.error.URLError) as e:
+  except (OSError,ValueError,HTTPException) as e:
    if attempt or (isinstance(e,urllib.error.HTTPError) and e.code in [401,403]):raise RuntimeError(type(e).__name__+': '+str(e)) from e
    wait=1
    if isinstance(e,urllib.error.HTTPError) and e.code==429:
