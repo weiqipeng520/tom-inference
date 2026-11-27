@@ -254,6 +254,7 @@
       const range = review.wilson95 ? ` · 95% Wilson 区间 ${review.wilson95.map(percent).join('–')}` : '';
       set('six-review', `六肖 ${review.hits}/${review.total} · 冻结映射覆盖基线 ${percent(review.coverageBaseline)}${range} · 映射与实际不一致 ${review.mappingMismatchCount} 期 · ${review.shadow.pairedTotal ? `同期对照：现行 ${review.shadow.liveHits}/${review.shadow.pairedTotal}，候选 ${review.shadow.shadowHits}/${review.shadow.pairedTotal}` : '并行候选尚无前瞻开奖样本'}（仅观察，不替换当前策略）`);
     }
+    const resultColumns = focused ? [['zodiacHits', '6']] : [['numberHits', '16'], ['zodiacHits', '6']];
     const expects = [...new Set([...envelopes.keys(), ...settlements.keys()])].sort((a, b) => b.localeCompare(a, 'en', { numeric: true }));
     replace('forecast-records', expects.length ? expects.slice(0, 30).map(expect => {
       const envelope = envelopes.get(expect); const settled = settlements.get(expect); const row = node('tr');
@@ -264,12 +265,12 @@
       else if (settled && !valid) status = '未纳入实时统计';
       else if (valid) status = `已结算 · r${settled.revision || 1}`;
       row.append(node('td', expect), node('td', settled ? `${text(settled.actualNumber)} / ${text(settled.actualZodiac)}` : '—'));
-      for (const [group, size] of [['numberHits', '16'], ['zodiacHits', '6']]) {
+      for (const [group, size] of resultColumns) {
         const value = valid ? settled[group]?.[size] : undefined;
         row.append(node('td', mark(value), value === true ? 'hit' : value === false ? 'miss' : 'pending'));
       }
       row.append(node('td', status, valid ? 'hit' : 'pending')); return row;
-    }) : [emptyRow(5, '暂无中央预测记录；不补造历史命中')]);
+    }) : [emptyRow(3 + resultColumns.length, '暂无中央预测记录；不补造历史命中')]);
     set('records-note', expects.length > 30 ? `展示最近 30 / ${expects.length} 期，完整记录见发布 JSON。` : `共 ${expects.length} 期发布记录，${eligible.length} 期纳入实时统计。`);
   }
   function hitText(value) { return value ? `${text(value.hits)} / ${text(value.total)} · ${percent(value.rate)}` : '—'; }
